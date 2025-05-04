@@ -1,0 +1,17 @@
+LAST SEEN   TYPE      REASON              OBJECT                            MESSAGE
+5m           Normal    Scheduled           pod/frontend-6d4cf56db6-abc12   Successfully assigned default/frontend-6d4cf56db6-abc12 to node-1
+5m           Normal    Pulling             pod/frontend-6d4cf56db6-abc12   Pulling image "myapp/frontend:v1.2"
+4m           Normal    Pulled              pod/frontend-6d4cf56db6-abc12   Successfully pulled image "myapp/frontend:v1.2"
+4m           Normal    Created             pod/frontend-6d4cf56db6-abc12   Created container frontend
+4m           Normal    Started             pod/frontend-6d4cf56db6-abc12   Started container frontend
+2m           Warning   Unhealthy           pod/frontend-6d4cf56db6-abc12   Readiness probe failed: HTTP probe failed with statuscode: 500
+1m           Warning   Unhealthy           pod/frontend-6d4cf56db6-abc12   Readiness probe failed: HTTP probe failed with statuscode: 500
+30s          Normal    Killing             pod/frontend-6d4cf56db6-abc12   Container frontend failed liveness probe, will be restarted
+29s          Normal    Pulling             pod/frontend-6d4cf56db6-abc12   Pulling image "myapp/frontend:v1.2"
+25s          Normal    Pulled              pod/frontend-6d4cf56db6-abc12   Successfully pulled image "myapp/frontend:v1.2"
+24s          Normal    Created             pod/frontend-6d4cf56db6-abc12   Created container frontend
+24s          Normal    Started             pod/frontend-6d4cf56db6-abc12   Started container frontend
+10m          Normal    SuccessfulCreate    replicaset/frontend-6d4cf56db6  Created pod: frontend-6d4cf56db6-abc12
+15m          Normal    ScalingReplicaSet   deployment/frontend             Scaled up replica set frontend-6d4cf56db6 to 3
+5m           Warning   FailedMount         pod/backend-7d8cf45ec7-def34    Unable to mount volumes for pod "backend-7d8cf45ec7-def34": timeout expired waiting for volumes to attach or mount for pod "default"/"backend-7d8cf45ec7-def34"
+4m           Warning   FailedScheduling    pod/database-5c7cf34fd8-ghi56   0/3 nodes are available: 3 Insufficient memory
