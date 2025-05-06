@@ -44,6 +44,10 @@ Examples:
   # Generate a report of all issues
   kubegpt report --output markdown --file cluster-health.md
 `,
+	Run: func(cmd *cobra.Command, args []string) {
+		// If no subcommand is provided, print help
+		cmd.Help()
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.

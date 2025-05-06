@@ -1,38 +1,35 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: example-app
+  name: nginx-deployment
+  namespace: default
   labels:
-    app: example
+    app: nginx
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: example
+      app: nginx
   template:
     metadata:
       labels:
-        app: example
+        app: nginx
     spec:
       containers:
-      - name: app
-        image: nginx:latest
+      - name: nginx
+        image: nginx:1.21.6
         ports:
         - containerPort: 80
         resources:
-          requests:
-            memory: "64Mi"
-            cpu: "100m"
           limits:
-            memory: "128Mi"
-            cpu: "200m"
-        env:
-        - name: DB_PASSWORD
-          value: "password123"
-        - name: API_KEY
-          value: "1234567890abcdef"
-      - name: sidecar
-        image: busybox
-        command: ["sh", "-c", "while true; do echo Heartbeat; sleep 60; done"]
-        securityContext:
-          privileged: true
+            cpu: "0.5"
+            memory: "512Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10

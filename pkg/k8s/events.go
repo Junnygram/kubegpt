@@ -1,121 +1,58 @@
 package k8s
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"time"
-
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EventIssue represents a failed event
-type EventIssue struct {
-	Name           string
-	Namespace      string
-	Type           string
-	Reason         string
-	Message        string
-	Count          int32
-	FirstTimestamp time.Time
-	LastTimestamp  time.Time
-	InvolvedObject v1.ObjectReference
-	Analysis       string
-	Fix            string
-}
-
-// GetFailedEvents returns a list of failed events in the current namespace
-func (c *Client) GetFailedEvents(ctx context.Context) ([]EventIssue, error) {
-	events, err := c.clientset.CoreV1().Events(c.namespace).List(ctx, metav1.ListOptions{})
+// GetFailedEvents gets all failed events in the specified namespace
+func (c *Client) GetFailedEvents(namespace string) ([]interface{}, error) {
+	// Get all events in the namespace
+	output, err := c.ExecuteKubectl("get", "events", "-n", namespace, "-o", "json")
 	if err != nil {
-		return nil, fmt.Errorf("failed to list events: %w", err)
+		return nil, err
 	}
 
-	var failedEvents []EventIssue
+	// Parse the JSON output
+	var eventList struct {
+		Items []struct {
+			Type      string    `json:"type"`
+			Reason    string    `json:"reason"`
+			Message   string    `json:"message"`
+			Count     int       `json:"count"`
+			FirstTimestamp string `json:"firstTimestamp"`
+			LastTimestamp  string `json:"lastTimestamp"`
+			InvolvedObject struct {
+				Kind      string `json:"kind"`
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"involvedObject"`
+		} `json:"items"`
+	}
 
-	for _, event := range events.Items {
-		// Skip normal events
-		if event.Type != v1.EventTypeWarning {
+	if err := json.Unmarshal([]byte(output), &eventList); err != nil {
+		return nil, fmt.Errorf("error parsing event list: %w", err)
+	}
+
+	// Filter failed events
+	var failedEvents []interface{}
+	for _, event := range eventList.Items {
+		// Only include Warning events
+		if event.Type != "Warning" {
 			continue
 		}
 
-		// Skip old events (older than 1 hour)
-		if time.Since(event.LastTimestamp.Time) > time.Hour {
-			continue
+		// Skip old events (more than 1 hour old)
+		if lastTime, err := time.Parse(time.RFC3339, event.LastTimestamp); err == nil {
+			if time.Since(lastTime) > time.Hour {
+				continue
+			}
 		}
 
-		eventIssue := EventIssue{
-			Name:           event.Name,
-			Namespace:      event.Namespace,
-			Type:           event.Type,
-			Reason:         event.Reason,
-			Message:        event.Message,
-			Count:          event.Count,
-			FirstTimestamp: event.FirstTimestamp.Time,
-			LastTimestamp:  event.LastTimestamp.Time,
-			InvolvedObject: event.InvolvedObject,
-		}
-
-		failedEvents = append(failedEvents, eventIssue)
+		// Add the event to the list
+		failedEvents = append(failedEvents, event)
 	}
 
 	return failedEvents, nil
-}
-
-// GetResourceEvents returns events for a specific resource
-func (c *Client) GetResourceEvents(ctx context.Context, kind, name string) ([]v1.Event, error) {
-	fieldSelector := fmt.Sprintf("involvedObject.kind=%s,involvedObject.name=%s,involvedObject.namespace=%s", 
-		kind, name, c.namespace)
-	
-	events, err := c.clientset.CoreV1().Events(c.namespace).List(ctx, metav1.ListOptions{
-		FieldSelector: fieldSelector,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list events for %s %s: %w", kind, name, err)
-	}
-
-	return events.Items, nil
-}
-
-// GetRecentEvents returns recent events (within the specified duration)
-func (c *Client) GetRecentEvents(ctx context.Context, duration time.Duration) ([]v1.Event, error) {
-	events, err := c.clientset.CoreV1().Events(c.namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list events: %w", err)
-	}
-
-	var recentEvents []v1.Event
-	cutoffTime := time.Now().Add(-duration)
-
-	for _, event := range events.Items {
-		if event.LastTimestamp.Time.After(cutoffTime) {
-			recentEvents = append(recentEvents, event)
-		}
-	}
-
-	return recentEvents, nil
-}
-
-// GetEventsByType returns events of a specific type
-func (c *Client) GetEventsByType(ctx context.Context, eventType string) ([]v1.Event, error) {
-	events, err := c.clientset.CoreV1().Events(c.namespace).List(ctx, metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("type=%s", eventType),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list events of type %s: %w", eventType, err)
-	}
-
-	return events.Items, nil
-}
-
-// GetEventsByReason returns events with a specific reason
-func (c *Client) GetEventsByReason(ctx context.Context, reason string) ([]v1.Event, error) {
-	events, err := c.clientset.CoreV1().Events(c.namespace).List(ctx, metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("reason=%s", reason),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list events with reason %s: %w", reason, err)
-	}
-
-	return events.Items, nil
 }

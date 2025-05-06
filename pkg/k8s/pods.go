@@ -1,115 +1,158 @@
 package k8s
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
-
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// PodIssue represents an issue with a pod
-type PodIssue struct {
-	Name       string
-	Namespace  string
-	Status     string
-	Containers []ContainerIssue
-	Events     []v1.Event
-	Logs       map[string]string // Container name -> logs
-	Node       string
-	Age        time.Duration
-	Message    string
-	Reason     string
-	Analysis   string
-	Fix        string
-}
-
-// ContainerIssue represents an issue with a container
-type ContainerIssue struct {
-	Name      string
-	Image     string
-	Ready     bool
-	Status    string
-	Restarts  int32
-	Message   string
-	Reason    string
-	ExitCode  int32
-	StartTime *metav1.Time
-}
-
-// GetUnhealthyPods returns a list of unhealthy pods in the current namespace
-func (c *Client) GetUnhealthyPods(ctx context.Context) ([]PodIssue, error) {
-	pods, err := c.clientset.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{})
+// GetUnhealthyPods gets all unhealthy pods in the specified namespace
+func (c *Client) GetUnhealthyPods(namespace string) ([]PodIssue, error) {
+	// Get all pods in the namespace
+	output, err := c.ExecuteKubectl("get", "pods", "-n", namespace, "-o", "json")
 	if err != nil {
-		return nil, fmt.Errorf("failed to list pods: %w", err)
+		return nil, err
 	}
 
-	var unhealthyPods []PodIssue
+	// Parse the JSON output
+	var podList struct {
+		Items []struct {
+			Metadata struct {
+				Name      string    `json:"name"`
+				Namespace string    `json:"namespace"`
+				CreationTimestamp string `json:"creationTimestamp"`
+			} `json:"metadata"`
+			Spec struct {
+				NodeName string `json:"nodeName"`
+			} `json:"spec"`
+			Status struct {
+				Phase   string `json:"phase"`
+				Message string `json:"message"`
+				Reason  string `json:"reason"`
+				ContainerStatuses []struct {
+					Name      string `json:"name"`
+					Image     string `json:"image"`
+					Ready     bool   `json:"ready"`
+					RestartCount int  `json:"restartCount"`
+					State     struct {
+						Waiting struct {
+							Reason  string `json:"reason"`
+							Message string `json:"message"`
+						} `json:"waiting"`
+						Terminated struct {
+							Reason    string `json:"reason"`
+							Message   string `json:"message"`
+							ExitCode  int    `json:"exitCode"`
+						} `json:"terminated"`
+					} `json:"state"`
+					LastState struct {
+						Terminated struct {
+							Reason    string `json:"reason"`
+							Message   string `json:"message"`
+							ExitCode  int    `json:"exitCode"`
+						} `json:"terminated"`
+					} `json:"lastState"`
+				} `json:"containerStatuses"`
+			} `json:"status"`
+		} `json:"items"`
+	}
 
-	for _, pod := range pods.Items {
-		// Skip if pod is running and ready
-		if isPodHealthy(&pod) {
+	if err := json.Unmarshal([]byte(output), &podList); err != nil {
+		return nil, fmt.Errorf("error parsing pod list: %w", err)
+	}
+
+	// Filter unhealthy pods
+	var unhealthyPods []PodIssue
+	for _, pod := range podList.Items {
+		// Skip pods that are Running and have all containers ready
+		if pod.Status.Phase == "Running" {
+			allContainersReady := true
+			for _, container := range pod.Status.ContainerStatuses {
+				if !container.Ready || container.RestartCount > 5 {
+					allContainersReady = false
+					break
+				}
+			}
+			if allContainersReady {
+				continue
+			}
+		}
+
+		// Skip pods that are Completed successfully
+		if pod.Status.Phase == "Succeeded" {
 			continue
 		}
 
-		// Create pod issue
+		// Create a PodIssue for the unhealthy pod
 		podIssue := PodIssue{
-			Name:      pod.Name,
-			Namespace: pod.Namespace,
-			Status:    string(pod.Status.Phase),
+			Name:      pod.Metadata.Name,
+			Namespace: pod.Metadata.Namespace,
+			Status:    pod.Status.Phase,
+			Message:   pod.Status.Message,
+			Reason:    pod.Status.Reason,
 			Node:      pod.Spec.NodeName,
-			Age:       time.Since(pod.CreationTimestamp.Time),
+		}
+
+		// Parse creation timestamp
+		if creationTime, err := time.Parse(time.RFC3339, pod.Metadata.CreationTimestamp); err == nil {
+			podIssue.Age = time.Since(creationTime)
 		}
 
 		// Add container issues
-		for _, containerStatus := range pod.Status.ContainerStatuses {
+		for _, container := range pod.Status.ContainerStatuses {
 			containerIssue := ContainerIssue{
-				Name:     containerStatus.Name,
-				Image:    containerStatus.Image,
-				Ready:    containerStatus.Ready,
-				Restarts: containerStatus.RestartCount,
+				Name:     container.Name,
+				Image:    container.Image,
+				Ready:    container.Ready,
+				Restarts: container.RestartCount,
 			}
 
-			// Get container state
-			if containerStatus.State.Waiting != nil {
-				containerIssue.Status = "Waiting"
-				containerIssue.Reason = containerStatus.State.Waiting.Reason
-				containerIssue.Message = containerStatus.State.Waiting.Message
-			} else if containerStatus.State.Running != nil {
+			// Determine container status and reason
+			if !container.Ready {
+				if container.State.Waiting.Reason != "" {
+					containerIssue.Status = "Waiting"
+					containerIssue.Reason = container.State.Waiting.Reason
+					containerIssue.Message = container.State.Waiting.Message
+				} else if container.State.Terminated.Reason != "" {
+					containerIssue.Status = "Terminated"
+					containerIssue.Reason = container.State.Terminated.Reason
+					containerIssue.Message = container.State.Terminated.Message
+					containerIssue.ExitCode = container.State.Terminated.ExitCode
+				} else {
+					containerIssue.Status = "Not Ready"
+				}
+			} else {
 				containerIssue.Status = "Running"
-				containerIssue.StartTime = &metav1.Time{Time: containerStatus.State.Running.StartedAt.Time}
-			} else if containerStatus.State.Terminated != nil {
-				containerIssue.Status = "Terminated"
-				containerIssue.Reason = containerStatus.State.Terminated.Reason
-				containerIssue.Message = containerStatus.State.Terminated.Message
-				containerIssue.ExitCode = containerStatus.State.Terminated.ExitCode
+				
+				// Check for high restart count
+				if container.RestartCount > 5 {
+					containerIssue.Reason = "HighRestartCount"
+					containerIssue.Message = fmt.Sprintf("Container has restarted %d times", container.RestartCount)
+					
+					// Check last termination reason
+					if container.LastState.Terminated.Reason != "" {
+						containerIssue.Message += fmt.Sprintf(", last exit reason: %s (code: %d)", 
+							container.LastState.Terminated.Reason, 
+							container.LastState.Terminated.ExitCode)
+						containerIssue.ExitCode = container.LastState.Terminated.ExitCode
+					}
+				}
 			}
 
 			podIssue.Containers = append(podIssue.Containers, containerIssue)
 		}
 
 		// Get pod events
-		events, err := c.GetPodEvents(ctx, pod.Name)
-		if err == nil {
-			podIssue.Events = events
-		}
+		podIssue.Events = c.getPodEvents(pod.Metadata.Name, pod.Metadata.Namespace)
 
-		// Get logs for each container
+		// Get pod logs for containers with issues
 		podIssue.Logs = make(map[string]string)
-		for _, container := range pod.Spec.Containers {
-			logs, err := c.GetPodLogs(ctx, pod.Name, container.Name, 50)
-			if err == nil {
+		for _, container := range podIssue.Containers {
+			if !container.Ready || container.Restarts > 5 {
+				logs, _ := c.getPodLogs(pod.Metadata.Name, pod.Metadata.Namespace, container.Name, 50)
 				podIssue.Logs[container.Name] = logs
-			}
-		}
-
-		// Add pod message and reason
-		for _, condition := range pod.Status.Conditions {
-			if condition.Status == v1.ConditionFalse {
-				podIssue.Message = condition.Message
-				podIssue.Reason = condition.Reason
-				break
 			}
 		}
 
@@ -119,89 +162,51 @@ func (c *Client) GetUnhealthyPods(ctx context.Context) ([]PodIssue, error) {
 	return unhealthyPods, nil
 }
 
-// GetPodStats returns lists of healthy and unhealthy pods
-func (c *Client) GetPodStats(ctx context.Context) ([]v1.Pod, []PodIssue, error) {
-	pods, err := c.clientset.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{})
+// getPodEvents gets events for a specific pod
+func (c *Client) getPodEvents(podName, namespace string) []interface{} {
+	output, err := c.ExecuteKubectl("get", "events", "-n", namespace, "--field-selector", fmt.Sprintf("involvedObject.name=%s", podName), "-o", "json")
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list pods: %w", err)
+		return nil
 	}
 
-	var healthyPods []v1.Pod
-	var unhealthyPodIssues []PodIssue
-
-	for _, pod := range pods.Items {
-		if isPodHealthy(&pod) {
-			healthyPods = append(healthyPods, pod)
-		} else {
-			// Create pod issue (simplified version without logs and events)
-			podIssue := PodIssue{
-				Name:      pod.Name,
-				Namespace: pod.Namespace,
-				Status:    string(pod.Status.Phase),
-				Node:      pod.Spec.NodeName,
-				Age:       time.Since(pod.CreationTimestamp.Time),
-			}
-
-			// Add container issues
-			for _, containerStatus := range pod.Status.ContainerStatuses {
-				containerIssue := ContainerIssue{
-					Name:     containerStatus.Name,
-					Image:    containerStatus.Image,
-					Ready:    containerStatus.Ready,
-					Restarts: containerStatus.RestartCount,
-				}
-
-				// Get container state
-				if containerStatus.State.Waiting != nil {
-					containerIssue.Status = "Waiting"
-					containerIssue.Reason = containerStatus.State.Waiting.Reason
-					containerIssue.Message = containerStatus.State.Waiting.Message
-				} else if containerStatus.State.Running != nil {
-					containerIssue.Status = "Running"
-					containerIssue.StartTime = &metav1.Time{Time: containerStatus.State.Running.StartedAt.Time}
-				} else if containerStatus.State.Terminated != nil {
-					containerIssue.Status = "Terminated"
-					containerIssue.Reason = containerStatus.State.Terminated.Reason
-					containerIssue.Message = containerStatus.State.Terminated.Message
-					containerIssue.ExitCode = containerStatus.State.Terminated.ExitCode
-				}
-
-				podIssue.Containers = append(podIssue.Containers, containerIssue)
-			}
-
-			// Add pod message and reason
-			for _, condition := range pod.Status.Conditions {
-				if condition.Status == v1.ConditionFalse {
-					podIssue.Message = condition.Message
-					podIssue.Reason = condition.Reason
-					break
-				}
-			}
-
-			unhealthyPodIssues = append(unhealthyPodIssues, podIssue)
-		}
+	var eventList struct {
+		Items []interface{} `json:"items"`
 	}
 
-	return healthyPods, unhealthyPodIssues, nil
+	if err := json.Unmarshal([]byte(output), &eventList); err != nil {
+		return nil
+	}
+
+	return eventList.Items
 }
 
-// isPodHealthy checks if a pod is healthy (running and all containers ready)
-func isPodHealthy(pod *v1.Pod) bool {
-	if pod.Status.Phase != v1.PodRunning {
-		return false
+// getPodLogs gets logs for a specific container in a pod
+func (c *Client) getPodLogs(podName, namespace, containerName string, tailLines int) (string, error) {
+	args := []string{"logs", "-n", namespace, podName, "-c", containerName}
+	
+	if tailLines > 0 {
+		args = append(args, "--tail", strconv.Itoa(tailLines))
 	}
-
-	for _, condition := range pod.Status.Conditions {
-		if condition.Type == v1.PodReady && condition.Status != v1.ConditionTrue {
-			return false
+	
+	output, err := c.ExecuteKubectl(args...)
+	if err != nil {
+		// Try to get previous logs if current logs fail
+		args = append(args, "--previous")
+		output, err = c.ExecuteKubectl(args...)
+		if err != nil {
+			return "", err
 		}
 	}
-
-	for _, containerStatus := range pod.Status.ContainerStatuses {
-		if !containerStatus.Ready || containerStatus.RestartCount > 5 {
-			return false
+	
+	// Truncate logs if they're too long
+	if len(output) > 2000 {
+		lines := strings.Split(output, "\n")
+		if len(lines) > 20 {
+			// Take the first 5 and last 15 lines
+			truncatedLines := append(lines[:5], append([]string{"...[logs truncated]..."}, lines[len(lines)-15:]...)...)
+			output = strings.Join(truncatedLines, "\n")
 		}
 	}
-
-	return true
+	
+	return output, nil
 }

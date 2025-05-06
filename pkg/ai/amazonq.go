@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/yourusername/kubegpt/pkg/k8s"
+	"github.com/junioroyewunmi/kubegpt/pkg/k8s"
 )
 
 // AmazonQClient is a client for interacting with Amazon Q Developer
@@ -36,7 +36,7 @@ func (c *AmazonQClient) AnalyzePodIssue(pod k8s.PodIssue) (string, error) {
 	prompt := buildPodIssuePrompt(pod)
 	
 	// Call Amazon Q
-	return c.callAmazonQ(prompt)
+	return c.CallAmazonQ(prompt)
 }
 
 // AnalyzeDeploymentIssue analyzes a deployment issue using Amazon Q
@@ -45,7 +45,7 @@ func (c *AmazonQClient) AnalyzeDeploymentIssue(deployment k8s.DeploymentIssue) (
 	prompt := buildDeploymentIssuePrompt(deployment)
 	
 	// Call Amazon Q
-	return c.callAmazonQ(prompt)
+	return c.CallAmazonQ(prompt)
 }
 
 // ExplainError explains a Kubernetes error using Amazon Q
@@ -63,109 +63,7 @@ Error message:
 `, errorMsg)
 	
 	// Call Amazon Q
-	return c.callAmazonQ(prompt)
-}
-
-// ExplainLogs explains Kubernetes logs using Amazon Q
-func (c *AmazonQClient) ExplainLogs(logs string) (string, error) {
-	// Build prompt for Amazon Q
-	prompt := fmt.Sprintf(`
-As a Kubernetes expert, please analyze these logs and explain:
-1. What issues or errors are present
-2. Root causes of any problems
-3. How to fix the issues
-4. Specific kubectl commands that might help diagnose or fix the issues
-
-Logs:
-%s
-`, logs)
-	
-	// Call Amazon Q
-	return c.callAmazonQ(prompt)
-}
-
-// ExplainYAML explains a Kubernetes YAML configuration using Amazon Q
-func (c *AmazonQClient) ExplainYAML(yaml string) (string, error) {
-	// Build prompt for Amazon Q
-	prompt := fmt.Sprintf(`
-As a Kubernetes expert, please analyze this YAML configuration and explain:
-1. What this configuration does
-2. Any issues, misconfigurations, or security concerns
-3. Best practices that should be applied
-4. Specific improvements that could be made
-
-YAML:
-%s
-`, yaml)
-	
-	// Call Amazon Q
-	return c.callAmazonQ(prompt)
-}
-
-// ExplainGeneric provides a generic explanation using Amazon Q
-func (c *AmazonQClient) ExplainGeneric(input string) (string, error) {
-	// Build prompt for Amazon Q
-	prompt := fmt.Sprintf(`
-As a Kubernetes expert, please analyze this information and provide insights:
-1. What is this information about
-2. Any issues or concerns
-3. Recommendations or best practices
-4. Specific kubectl commands that might be helpful
-
-Input:
-%s
-`, input)
-	
-	// Call Amazon Q
-	return c.callAmazonQ(prompt)
-}
-
-// GenerateFix generates a fix for a Kubernetes issue using Amazon Q
-func (c *AmazonQClient) GenerateFix(input, inputType string) (string, error) {
-	// Build prompt for Amazon Q based on input type
-	var prompt string
-	
-	switch inputType {
-	case "error":
-		prompt = fmt.Sprintf(`
-As a Kubernetes expert, please generate a YAML patch or kubectl commands to fix this error:
-
-Error:
-%s
-
-Please provide:
-1. A brief explanation of the fix
-2. YAML patch or kubectl commands to apply the fix
-3. Any additional steps needed
-`, input)
-	case "yaml":
-		prompt = fmt.Sprintf(`
-As a Kubernetes expert, please generate an improved version of this YAML configuration:
-
-Original YAML:
-%s
-
-Please provide:
-1. A brief explanation of the improvements
-2. The complete improved YAML
-3. Any additional steps needed
-`, input)
-	default:
-		prompt = fmt.Sprintf(`
-As a Kubernetes expert, please generate a fix for this issue:
-
-Issue:
-%s
-
-Please provide:
-1. A brief explanation of the fix
-2. YAML patch or kubectl commands to apply the fix
-3. Any additional steps needed
-`, input)
-	}
-	
-	// Call Amazon Q
-	return c.callAmazonQ(prompt)
+	return c.CallAmazonQ(prompt)
 }
 
 // GeneratePodFix generates a fix for a pod issue using Amazon Q
@@ -199,7 +97,7 @@ Please provide:
 	)
 	
 	// Call Amazon Q
-	return c.callAmazonQ(prompt)
+	return c.CallAmazonQ(prompt)
 }
 
 // GenerateDeploymentFix generates a fix for a deployment issue using Amazon Q
@@ -234,11 +132,11 @@ Please provide:
 	)
 	
 	// Call Amazon Q
-	return c.callAmazonQ(prompt)
+	return c.CallAmazonQ(prompt)
 }
 
-// callAmazonQ calls the Amazon Q CLI with a prompt
-func (c *AmazonQClient) callAmazonQ(prompt string) (string, error) {
+// CallAmazonQ calls the Amazon Q CLI with a prompt
+func (c *AmazonQClient) CallAmazonQ(prompt string) (string, error) {
 	// Check if we should use the CLI or mock responses for development
 	if os.Getenv("KUBEGPT_MOCK_AI") == "true" {
 		return c.mockResponse(prompt), nil
@@ -297,73 +195,191 @@ The container is repeatedly crashing and Kubernetes is trying to restart it, but
 ### How to fix:
 
 1. Check the container logs:
-   \`\`\`
    kubectl logs <pod-name> -c <container-name>
-   \`\`\`
 
 2. Check for resource constraints:
-   \`\`\`
    kubectl describe pod <pod-name>
-   \`\`\`
 
 3. If it's a memory issue, increase the memory limit:
-   \`\`\`yaml
    resources:
      requests:
        memory: "128Mi"
      limits:
        memory: "256Mi"
-   \`\`\`
 
 4. If it's a configuration issue, check environment variables and config maps:
-   \`\`\`
    kubectl describe configmap <configmap-name>
-   \`\`\`
-
-5. Try running the container locally to debug:
-   \`\`\`
-   docker run --rm -it <image-name> <command>
-   \`\`\`
 `
-	} else if strings.Contains(prompt, "ImagePullBackOff") {
-		return `
-## Issue Analysis: ImagePullBackOff
+	} else if strings.Contains(prompt, "transform") || strings.Contains(prompt, "Terraform") || strings.Contains(prompt, "Pulumi") || strings.Contains(prompt, "CDK") {
+		// Mock response for transformation
+		if strings.Contains(prompt, "terraform") {
+			return `
+provider "kubernetes" {
+  config_path = "~/.kube/config"
+}
 
-### What's happening:
-Kubernetes is unable to pull the container image from the registry.
+resource "kubernetes_deployment" "example" {
+  metadata {
+    name = "example-deployment"
+    namespace = "default"
+    labels = {
+      app = "example"
+    }
+  }
 
-### Likely causes:
-1. Image doesn't exist or wrong image name
-2. Registry authentication issues
-3. Network connectivity problems
-4. Rate limiting by the registry
+  spec {
+    replicas = 3
 
-### How to fix:
+    selector {
+      match_labels = {
+        app = "example"
+      }
+    }
 
-1. Verify the image name and tag:
-   \`\`\`
-   kubectl describe pod <pod-name>
-   \`\`\`
+    template {
+      metadata {
+        labels = {
+          app = "example"
+        }
+      }
 
-2. Check if you need registry credentials:
-   \`\`\`
-   kubectl create secret docker-registry regcred --docker-server=<registry> --docker-username=<username> --docker-password=<password>
-   \`\`\`
+      spec {
+        container {
+          image = "nginx:1.21.6"
+          name  = "example"
 
-3. Update the pod to use the credentials:
-   \`\`\`yaml
-   spec:
-     imagePullSecrets:
-     - name: regcred
-   \`\`\`
+          resources {
+            limits = {
+              cpu    = "0.5"
+              memory = "512Mi"
+            }
+            requests = {
+              cpu    = "250m"
+              memory = "256Mi"
+            }
+          }
 
-4. Check if you can pull the image manually:
-   \`\`\`
-   docker pull <image-name>:<tag>
-   \`\`\`
-
-5. If using a private registry, ensure your cluster has network access to it.
+          liveness_probe {
+            http_get {
+              path = "/"
+              port = 80
+            }
+            initial_delay_seconds = 30
+            period_seconds        = 10
+          }
+        }
+      }
+    }
+  }
+}
 `
+		} else if strings.Contains(prompt, "pulumi-py") {
+			return `
+import pulumi
+import pulumi_kubernetes as k8s
+
+# Create a Kubernetes Deployment
+app_labels = {"app": "example"}
+deployment = k8s.apps.v1.Deployment(
+    "example-deployment",
+    metadata=k8s.meta.v1.ObjectMetaArgs(
+        name="example-deployment",
+        namespace="default",
+        labels=app_labels,
+    ),
+    spec=k8s.apps.v1.DeploymentSpecArgs(
+        replicas=3,
+        selector=k8s.meta.v1.LabelSelectorArgs(
+            match_labels=app_labels,
+        ),
+        template=k8s.core.v1.PodTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                labels=app_labels,
+            ),
+            spec=k8s.core.v1.PodSpecArgs(
+                containers=[
+                    k8s.core.v1.ContainerArgs(
+                        name="example",
+                        image="nginx:1.21.6",
+                        resources=k8s.core.v1.ResourceRequirementsArgs(
+                            limits={
+                                "cpu": "0.5",
+                                "memory": "512Mi",
+                            },
+                            requests={
+                                "cpu": "250m",
+                                "memory": "256Mi",
+                            },
+                        ),
+                        liveness_probe=k8s.core.v1.ProbeArgs(
+                            http_get=k8s.core.v1.HTTPGetActionArgs(
+                                path="/",
+                                port=80,
+                            ),
+                            initial_delay_seconds=30,
+                            period_seconds=10,
+                        ),
+                    )
+                ],
+            ),
+        ),
+    ),
+)
+
+pulumi.export("deployment_name", deployment.metadata.name)
+`
+		} else {
+			return `
+import * as k8s from '@pulumi/kubernetes';
+
+// Create a Kubernetes Deployment
+const appLabels = { app: 'example' };
+const deployment = new k8s.apps.v1.Deployment('example-deployment', {
+    metadata: {
+        name: 'example-deployment',
+        namespace: 'default',
+        labels: appLabels,
+    },
+    spec: {
+        replicas: 3,
+        selector: {
+            matchLabels: appLabels,
+        },
+        template: {
+            metadata: {
+                labels: appLabels,
+            },
+            spec: {
+                containers: [{
+                    name: 'example',
+                    image: 'nginx:1.21.6',
+                    resources: {
+                        limits: {
+                            cpu: '0.5',
+                            memory: '512Mi',
+                        },
+                        requests: {
+                            cpu: '250m',
+                            memory: '256Mi',
+                        },
+                    },
+                    livenessProbe: {
+                        httpGet: {
+                            path: '/',
+                            port: 80,
+                        },
+                        initialDelaySeconds: 30,
+                        periodSeconds: 10,
+                    },
+                }],
+            },
+        },
+    },
+});
+
+export const deploymentName = deployment.metadata.name;
+`
+		}
 	} else {
 		return `
 ## Kubernetes Issue Analysis
@@ -379,28 +395,13 @@ Based on the information provided, here are my observations and recommendations:
 ### Recommended Actions:
 
 1. Check pod logs for detailed error messages:
-   \`\`\`
    kubectl logs <pod-name> -n <namespace>
-   \`\`\`
 
 2. Describe the resource for more details:
-   \`\`\`
    kubectl describe <resource-type> <resource-name> -n <namespace>
-   \`\`\`
 
 3. Verify configuration:
-   \`\`\`
    kubectl get <resource-type> <resource-name> -n <namespace> -o yaml
-   \`\`\`
-
-4. Check events in the namespace:
-   \`\`\`
-   kubectl get events -n <namespace> --sort-by='.lastTimestamp'
-   \`\`\`
-
-5. Ensure proper RBAC permissions are in place if applicable.
-
-For more specific guidance, please provide additional details about the issue.
 `
 	}
 }
@@ -414,8 +415,6 @@ func buildPodIssuePrompt(pod k8s.PodIssue) string {
 	sb.WriteString(fmt.Sprintf("Pod: %s\n", pod.Name))
 	sb.WriteString(fmt.Sprintf("Namespace: %s\n", pod.Namespace))
 	sb.WriteString(fmt.Sprintf("Status: %s\n", pod.Status))
-	sb.WriteString(fmt.Sprintf("Age: %s\n", pod.Age.String()))
-	sb.WriteString(fmt.Sprintf("Node: %s\n", pod.Node))
 	
 	if pod.Message != "" {
 		sb.WriteString(fmt.Sprintf("Message: %s\n", pod.Message))
@@ -437,21 +436,6 @@ func buildPodIssuePrompt(pod k8s.PodIssue) string {
 		sb.WriteString(formatEvents(pod.Events))
 	}
 	
-	// Add logs (limited to avoid huge prompts)
-	if len(pod.Logs) > 0 {
-		sb.WriteString("\nContainer logs (most recent):\n")
-		for container, logs := range pod.Logs {
-			// Limit logs to last 20 lines
-			logLines := strings.Split(logs, "\n")
-			if len(logLines) > 20 {
-				logLines = logLines[len(logLines)-20:]
-			}
-			limitedLogs := strings.Join(logLines, "\n")
-			
-			sb.WriteString(fmt.Sprintf("\n--- %s logs ---\n%s\n", container, limitedLogs))
-		}
-	}
-	
 	sb.WriteString("\nPlease provide:\n")
 	sb.WriteString("1. A diagnosis of the issue\n")
 	sb.WriteString("2. Likely root causes\n")
@@ -468,10 +452,6 @@ func buildDeploymentIssuePrompt(deployment k8s.DeploymentIssue) string {
 	sb.WriteString(fmt.Sprintf("Deployment: %s\n", deployment.Name))
 	sb.WriteString(fmt.Sprintf("Namespace: %s\n", deployment.Namespace))
 	sb.WriteString(fmt.Sprintf("Replicas: %d/%d ready\n", deployment.ReadyReplicas, deployment.Replicas))
-	sb.WriteString(fmt.Sprintf("Updated replicas: %d/%d\n", deployment.UpdatedReplicas, deployment.Replicas))
-	sb.WriteString(fmt.Sprintf("Available replicas: %d/%d\n", deployment.AvailableReplicas, deployment.Replicas))
-	sb.WriteString(fmt.Sprintf("Strategy: %s\n", deployment.Strategy))
-	sb.WriteString(fmt.Sprintf("Age: %s\n", deployment.Age.String()))
 	
 	if deployment.Message != "" {
 		sb.WriteString(fmt.Sprintf("Message: %s\n", deployment.Message))
@@ -482,7 +462,7 @@ func buildDeploymentIssuePrompt(deployment k8s.DeploymentIssue) string {
 	}
 	
 	// Add conditions
-	if len(deployment.Conditions) > 0 {
+	if deployment.Conditions != nil {
 		sb.WriteString("\nConditions:\n")
 		sb.WriteString(formatDeploymentConditions(deployment.Conditions))
 	}
@@ -507,8 +487,6 @@ func formatContainerIssues(containers []k8s.ContainerIssue) string {
 	
 	for _, container := range containers {
 		sb.WriteString(fmt.Sprintf("- Container: %s\n", container.Name))
-		sb.WriteString(fmt.Sprintf("  Image: %s\n", container.Image))
-		sb.WriteString(fmt.Sprintf("  Ready: %t\n", container.Ready))
 		sb.WriteString(fmt.Sprintf("  Status: %s\n", container.Status))
 		sb.WriteString(fmt.Sprintf("  Restarts: %d\n", container.Restarts))
 		
@@ -518,10 +496,6 @@ func formatContainerIssues(containers []k8s.ContainerIssue) string {
 		
 		if container.Message != "" {
 			sb.WriteString(fmt.Sprintf("  Message: %s\n", container.Message))
-		}
-		
-		if container.ExitCode != 0 {
-			sb.WriteString(fmt.Sprintf("  Exit Code: %d\n", container.ExitCode))
 		}
 		
 		sb.WriteString("\n")

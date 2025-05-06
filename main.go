@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/yourusername/kubegpt/cmd"
+	"github.com/junioroyewunmi/kubegpt/cmd"
 )
 
 func main() {

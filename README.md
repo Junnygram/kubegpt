@@ -11,6 +11,8 @@ KubeGPT is an AI-powered Kubernetes troubleshooting assistant that helps DevOps 
 - **Smart Troubleshooting**: Get explanations of issues and suggested kubectl commands to fix them
 - **Fix Generation**: Generate YAML patches to fix common Kubernetes issues
 - **Comprehensive Reporting**: Generate reports in terminal, markdown, or send to Slack
+- **Interactive Learning Game**: Play a Kubernetes troubleshooting game to improve your skills
+- **Resource Transformation**: Convert Kubernetes YAML to Terraform, Pulumi, AWS CDK, and more
 
 ## Installation
 
@@ -106,6 +108,46 @@ Send the report to Slack:
 kubegpt report --output slack --slack-webhook https://hooks.slack.com/services/...
 ```
 
+### Playing the Kubernetes Troubleshooting Game
+
+Start a new game with default difficulty:
+
+```bash
+kubegpt game
+```
+
+Start a game with easy difficulty:
+
+```bash
+kubegpt game --difficulty easy
+```
+
+Start a challenging game:
+
+```bash
+kubegpt game --difficulty hard
+```
+
+### Transforming Kubernetes Resources
+
+Convert Kubernetes YAML to Terraform:
+
+```bash
+kubegpt transform --target-lang terraform -f deployment.yaml -o deployment.tf
+```
+
+Convert Kubernetes YAML to Pulumi Python:
+
+```bash
+kubegpt transform --target-lang pulumi-py -f deployment.yaml -o pulumi_app.py
+```
+
+Convert between YAML and JSON:
+
+```bash
+kubegpt transform --input-format yaml --output-format json -f deployment.yaml -o deployment.json
+```
+
 ## Configuration
 
 KubeGPT uses your kubectl configuration by default. You can specify a different kubeconfig file using the `--kubeconfig` flag:
@@ -145,7 +187,7 @@ Output:
 | | / /| |_| |__   ___| |  __ | |__) |  | |   
 | |/ / | __| '_ \ / _ \ | |_ ||  ___/   | |   
 |   <  | |_| |_) |  __/ |__| || |       | |   
-|_|\_\  \__|_.__/ \___|\_____|_|       |_|   
+|_|\_\  \__|_.__/ \___|\_____||_|       |_|   
                                              
 AI-powered Kubernetes troubleshooting assistant
 --------------------------------------------
