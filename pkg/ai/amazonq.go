@@ -2,7 +2,6 @@ package ai
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,8 +32,22 @@ func NewAmazonQClient() *AmazonQClient {
 // AnalyzePodIssue analyzes a pod issue using Amazon Q
 func (c *AmazonQClient) AnalyzePodIssue(pod k8s.PodIssue) (string, error) {
 	// Build prompt for Amazon Q
-	prompt := buildPodIssuePrompt(pod)
-	
+	prompt := fmt.Sprintf(`
+As a Kubernetes expert, please analyze this pod issue:
+
+Pod: %s
+Namespace: %s
+Status: %s
+Message: %s
+Reason: %s
+
+Please provide:
+1. A diagnosis of the issue
+2. Likely root causes
+3. Recommended solutions
+4. Specific kubectl commands to help diagnose or fix the issue
+`, pod.Name, pod.Namespace, pod.Status, pod.Message, pod.Reason)
+
 	// Call Amazon Q
 	return c.CallAmazonQ(prompt)
 }
@@ -42,8 +55,22 @@ func (c *AmazonQClient) AnalyzePodIssue(pod k8s.PodIssue) (string, error) {
 // AnalyzeDeploymentIssue analyzes a deployment issue using Amazon Q
 func (c *AmazonQClient) AnalyzeDeploymentIssue(deployment k8s.DeploymentIssue) (string, error) {
 	// Build prompt for Amazon Q
-	prompt := buildDeploymentIssuePrompt(deployment)
-	
+	prompt := fmt.Sprintf(`
+As a Kubernetes expert, please analyze this deployment issue:
+
+Deployment: %s
+Namespace: %s
+Replicas: %d/%d ready
+Message: %s
+Reason: %s
+
+Please provide:
+1. A diagnosis of the issue
+2. Likely root causes
+3. Recommended solutions
+4. Specific kubectl commands to help diagnose or fix the issue
+`, deployment.Name, deployment.Namespace, deployment.ReadyReplicas, deployment.Replicas, deployment.Message, deployment.Reason)
+
 	// Call Amazon Q
 	return c.CallAmazonQ(prompt)
 }
@@ -61,7 +88,7 @@ As a Kubernetes expert, please analyze this error message and explain:
 Error message:
 %s
 `, errorMsg)
-	
+
 	// Call Amazon Q
 	return c.CallAmazonQ(prompt)
 }
@@ -77,25 +104,17 @@ Status: %s
 Message: %s
 Reason: %s
 
-Container issues:
-%s
-
-Events:
-%s
-
 Please provide:
 1. A brief explanation of the fix
 2. YAML patch or kubectl commands to apply the fix
 3. Any additional steps needed
-`, 
+`,
 		pod.Name,
 		pod.Status,
 		pod.Message,
 		pod.Reason,
-		formatContainerIssues(pod.Containers),
-		formatEvents(pod.Events),
 	)
-	
+
 	// Call Amazon Q
 	return c.CallAmazonQ(prompt)
 }
@@ -111,34 +130,38 @@ Replicas: %d/%d ready
 Message: %s
 Reason: %s
 
-Conditions:
-%s
-
-Events:
-%s
-
 Please provide:
 1. A brief explanation of the fix
 2. YAML patch or kubectl commands to apply the fix
 3. Any additional steps needed
-`, 
+`,
 		deployment.Name,
 		deployment.ReadyReplicas,
 		deployment.Replicas,
 		deployment.Message,
 		deployment.Reason,
-		formatDeploymentConditions(deployment.Conditions),
-		formatEvents(deployment.Events),
 	)
-	
+
 	// Call Amazon Q
+	return c.CallAmazonQ(prompt)
+}
+
+// GenerateResponse generates a response based on a custom prompt
+func (c *AmazonQClient) GenerateResponse(prompt string) (string, error) {
+	// Call Amazon Q with the provided prompt
 	return c.CallAmazonQ(prompt)
 }
 
 // CallAmazonQ calls the Amazon Q CLI with a prompt
 func (c *AmazonQClient) CallAmazonQ(prompt string) (string, error) {
-	// Check if we should use the CLI or mock responses for development
+	// Check if mock mode is enabled - default to using real Amazon Q
+	useMock := false
 	if os.Getenv("KUBEGPT_MOCK_AI") == "true" {
+		useMock = true
+	}
+
+	if useMock {
+		// Use mock response in development mode
 		return c.mockResponse(prompt), nil
 	}
 
@@ -157,7 +180,7 @@ func (c *AmazonQClient) CallAmazonQ(prompt string) (string, error) {
 
 	// Create a command to call Amazon Q CLI
 	cmd := exec.Command(c.cliPath, "chat", "--prompt-file", promptFile.Name())
-	
+
 	// Capture stdout and stderr
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -165,11 +188,8 @@ func (c *AmazonQClient) CallAmazonQ(prompt string) (string, error) {
 
 	// Run the command
 	if err := cmd.Run(); err != nil {
-		// If the CLI is not installed, return a helpful message
-		if stderr.String() == "" {
-			return "", fmt.Errorf("Amazon Q CLI not found or not installed. Please install it using 'pip install amazon-q-developer-cli'")
-		}
-		return "", fmt.Errorf("failed to call Amazon Q: %w\n%s", err, stderr.String())
+		// If the CLI is not installed or fails, return a helpful message
+		return "", fmt.Errorf("Failed to run Amazon Q CLI: %w. Error output: %s", err, stderr.String())
 	}
 
 	// Return the response
@@ -178,7 +198,7 @@ func (c *AmazonQClient) CallAmazonQ(prompt string) (string, error) {
 
 // mockResponse generates a mock response for development
 func (c *AmazonQClient) mockResponse(prompt string) string {
-	// For development and testing, return a mock response
+	// Check for common error types
 	if strings.Contains(prompt, "CrashLoopBackOff") {
 		return `
 ## Issue Analysis: CrashLoopBackOff
@@ -210,176 +230,100 @@ The container is repeatedly crashing and Kubernetes is trying to restart it, but
 4. If it's a configuration issue, check environment variables and config maps:
    kubectl describe configmap <configmap-name>
 `
-	} else if strings.Contains(prompt, "transform") || strings.Contains(prompt, "Terraform") || strings.Contains(prompt, "Pulumi") || strings.Contains(prompt, "CDK") {
-		// Mock response for transformation
-		if strings.Contains(prompt, "terraform") {
-			return `
-provider "kubernetes" {
-  config_path = "~/.kube/config"
-}
+	} else if strings.Contains(prompt, "ImagePullBackOff") {
+		return `
+## Issue Analysis: ImagePullBackOff
 
-resource "kubernetes_deployment" "example" {
-  metadata {
-    name = "example-deployment"
-    namespace = "default"
-    labels = {
-      app = "example"
-    }
-  }
+### What's happening:
+Kubernetes is unable to pull the specified container image from a container registry.
 
-  spec {
-    replicas = 3
+### Likely causes:
+1. Incorrect image name or tag
+2. Image does not exist in the registry
+3. Private registry requires authentication
+4. Network connectivity issues between the cluster and registry
+5. Rate limiting by the registry (e.g., Docker Hub)
 
-    selector {
-      match_labels = {
-        app = "example"
-      }
-    }
+### How to fix:
 
-    template {
-      metadata {
-        labels = {
-          app = "example"
-        }
-      }
+1. Verify the image name and tag are correct:
+   kubectl describe pod <pod-name>
 
-      spec {
-        container {
-          image = "nginx:1.21.6"
-          name  = "example"
+2. Check if you can manually pull the image:
+   docker pull <image-name>:<tag>
 
-          resources {
-            limits = {
-              cpu    = "0.5"
-              memory = "512Mi"
-            }
-            requests = {
-              cpu    = "250m"
-              memory = "256Mi"
-            }
-          }
+3. If using a private registry, create a pull secret:
+   kubectl create secret docker-registry regcred --docker-server=<registry-server> --docker-username=<username> --docker-password=<password>
 
-          liveness_probe {
-            http_get {
-              path = "/"
-              port = 80
-            }
-            initial_delay_seconds = 30
-            period_seconds        = 10
-          }
-        }
-      }
-    }
-  }
-}
+4. Update the deployment to use the pull secret:
+   kubectl patch deployment <deployment-name> -p '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"regcred"}]}}}}'
+
+5. Check network connectivity from the nodes to the registry:
+   kubectl debug node/<node-name> -it --image=ubuntu
 `
-		} else if strings.Contains(prompt, "pulumi-py") {
-			return `
-import pulumi
-import pulumi_kubernetes as k8s
+	} else if strings.Contains(prompt, "Readiness probe failed") {
+		return `
+## Issue Analysis: Readiness Probe Failure
 
-# Create a Kubernetes Deployment
-app_labels = {"app": "example"}
-deployment = k8s.apps.v1.Deployment(
-    "example-deployment",
-    metadata=k8s.meta.v1.ObjectMetaArgs(
-        name="example-deployment",
-        namespace="default",
-        labels=app_labels,
-    ),
-    spec=k8s.apps.v1.DeploymentSpecArgs(
-        replicas=3,
-        selector=k8s.meta.v1.LabelSelectorArgs(
-            match_labels=app_labels,
-        ),
-        template=k8s.core.v1.PodTemplateSpecArgs(
-            metadata=k8s.meta.v1.ObjectMetaArgs(
-                labels=app_labels,
-            ),
-            spec=k8s.core.v1.PodSpecArgs(
-                containers=[
-                    k8s.core.v1.ContainerArgs(
-                        name="example",
-                        image="nginx:1.21.6",
-                        resources=k8s.core.v1.ResourceRequirementsArgs(
-                            limits={
-                                "cpu": "0.5",
-                                "memory": "512Mi",
-                            },
-                            requests={
-                                "cpu": "250m",
-                                "memory": "256Mi",
-                            },
-                        ),
-                        liveness_probe=k8s.core.v1.ProbeArgs(
-                            http_get=k8s.core.v1.HTTPGetActionArgs(
-                                path="/",
-                                port=80,
-                            ),
-                            initial_delay_seconds=30,
-                            period_seconds=10,
-                        ),
-                    )
-                ],
-            ),
-        ),
-    ),
-)
+### What's happening:
+The container's readiness probe is failing, which means Kubernetes won't route traffic to this pod.
 
-pulumi.export("deployment_name", deployment.metadata.name)
+### Likely causes:
+1. Application is not ready to accept traffic
+2. Incorrect probe configuration (wrong port, path, or timing)
+3. Application is experiencing internal errors
+4. Network connectivity issues within the cluster
+5. Resource constraints affecting application startup
+
+### How to fix:
+
+1. Check the application logs for errors:
+   kubectl logs <pod-name> -c <container-name>
+
+2. Verify the readiness probe configuration:
+   kubectl describe pod <pod-name>
+
+3. Test the endpoint manually from within the cluster:
+   kubectl exec -it <another-pod> -- curl http://<pod-ip>:<port>/path
+
+4. Adjust the probe timing if the application needs more time to start:
+   kubectl patch deployment <deployment-name> -p '{"spec":{"template":{"spec":{"containers":[{"name":"<container-name>","readinessProbe":{"initialDelaySeconds":30,"periodSeconds":10}}]}}}}'
+
+5. Check for resource constraints:
+   kubectl top pod <pod-name>
 `
-		} else {
-			return `
-import * as k8s from '@pulumi/kubernetes';
+	} else if strings.Contains(prompt, "OOMKilled") {
+		return `
+## Issue Analysis: OOMKilled
 
-// Create a Kubernetes Deployment
-const appLabels = { app: 'example' };
-const deployment = new k8s.apps.v1.Deployment('example-deployment', {
-    metadata: {
-        name: 'example-deployment',
-        namespace: 'default',
-        labels: appLabels,
-    },
-    spec: {
-        replicas: 3,
-        selector: {
-            matchLabels: appLabels,
-        },
-        template: {
-            metadata: {
-                labels: appLabels,
-            },
-            spec: {
-                containers: [{
-                    name: 'example',
-                    image: 'nginx:1.21.6',
-                    resources: {
-                        limits: {
-                            cpu: '0.5',
-                            memory: '512Mi',
-                        },
-                        requests: {
-                            cpu: '250m',
-                            memory: '256Mi',
-                        },
-                    },
-                    livenessProbe: {
-                        httpGet: {
-                            path: '/',
-                            port: 80,
-                        },
-                        initialDelaySeconds: 30,
-                        periodSeconds: 10,
-                    },
-                }],
-            },
-        },
-    },
-});
+### What's happening:
+The container was terminated because it exceeded its memory limit.
 
-export const deploymentName = deployment.metadata.name;
+### Likely causes:
+1. Memory leak in the application
+2. Memory limit set too low for the application's needs
+3. Temporary spike in memory usage
+4. Java applications with default heap size settings
+5. Large data processing without proper memory management
+
+### How to fix:
+
+1. Check the memory usage pattern before the OOM:
+   kubectl describe pod <pod-name>
+
+2. Increase the memory limit:
+   kubectl patch deployment <deployment-name> -p '{"spec":{"template":{"spec":{"containers":[{"name":"<container-name>","resources":{"limits":{"memory":"512Mi"},"requests":{"memory":"256Mi"}}}]}}}}'
+
+3. For Java applications, set JVM memory limits:
+   Add environment variables: JAVA_OPTS="-Xmx256m -Xms128m"
+
+4. Analyze the application for memory leaks:
+   kubectl exec -it <pod-name> -- jmap -dump:format=b,file=/tmp/heap.bin <java-pid>
+   kubectl cp <pod-name>:/tmp/heap.bin ./heap.bin
+
+5. Consider using a memory profiler or monitoring tool:
+   kubectl top pod <pod-name> --containers
 `
-		}
 	} else {
 		return `
 ## Kubernetes Issue Analysis
@@ -391,6 +335,8 @@ Based on the information provided, here are my observations and recommendations:
 2. Configuration errors
 3. Network connectivity problems
 4. Permission issues
+5. Container image problems
+6. Storage-related issues
 
 ### Recommended Actions:
 
@@ -402,130 +348,11 @@ Based on the information provided, here are my observations and recommendations:
 
 3. Verify configuration:
    kubectl get <resource-type> <resource-name> -n <namespace> -o yaml
+
+4. Check events in the namespace:
+   kubectl get events -n <namespace> --sort-by='.lastTimestamp'
+
+5. For more specific guidance, please provide additional details about the issue.
 `
 	}
-}
-
-// Helper functions to format data for prompts
-
-func buildPodIssuePrompt(pod k8s.PodIssue) string {
-	var sb strings.Builder
-	
-	sb.WriteString(fmt.Sprintf("As a Kubernetes expert, please analyze this pod issue:\n\n"))
-	sb.WriteString(fmt.Sprintf("Pod: %s\n", pod.Name))
-	sb.WriteString(fmt.Sprintf("Namespace: %s\n", pod.Namespace))
-	sb.WriteString(fmt.Sprintf("Status: %s\n", pod.Status))
-	
-	if pod.Message != "" {
-		sb.WriteString(fmt.Sprintf("Message: %s\n", pod.Message))
-	}
-	
-	if pod.Reason != "" {
-		sb.WriteString(fmt.Sprintf("Reason: %s\n", pod.Reason))
-	}
-	
-	// Add container issues
-	if len(pod.Containers) > 0 {
-		sb.WriteString("\nContainer issues:\n")
-		sb.WriteString(formatContainerIssues(pod.Containers))
-	}
-	
-	// Add events
-	if len(pod.Events) > 0 {
-		sb.WriteString("\nEvents:\n")
-		sb.WriteString(formatEvents(pod.Events))
-	}
-	
-	sb.WriteString("\nPlease provide:\n")
-	sb.WriteString("1. A diagnosis of the issue\n")
-	sb.WriteString("2. Likely root causes\n")
-	sb.WriteString("3. Recommended solutions\n")
-	sb.WriteString("4. Specific kubectl commands to help diagnose or fix the issue\n")
-	
-	return sb.String()
-}
-
-func buildDeploymentIssuePrompt(deployment k8s.DeploymentIssue) string {
-	var sb strings.Builder
-	
-	sb.WriteString(fmt.Sprintf("As a Kubernetes expert, please analyze this deployment issue:\n\n"))
-	sb.WriteString(fmt.Sprintf("Deployment: %s\n", deployment.Name))
-	sb.WriteString(fmt.Sprintf("Namespace: %s\n", deployment.Namespace))
-	sb.WriteString(fmt.Sprintf("Replicas: %d/%d ready\n", deployment.ReadyReplicas, deployment.Replicas))
-	
-	if deployment.Message != "" {
-		sb.WriteString(fmt.Sprintf("Message: %s\n", deployment.Message))
-	}
-	
-	if deployment.Reason != "" {
-		sb.WriteString(fmt.Sprintf("Reason: %s\n", deployment.Reason))
-	}
-	
-	// Add conditions
-	if deployment.Conditions != nil {
-		sb.WriteString("\nConditions:\n")
-		sb.WriteString(formatDeploymentConditions(deployment.Conditions))
-	}
-	
-	// Add events
-	if len(deployment.Events) > 0 {
-		sb.WriteString("\nEvents:\n")
-		sb.WriteString(formatEvents(deployment.Events))
-	}
-	
-	sb.WriteString("\nPlease provide:\n")
-	sb.WriteString("1. A diagnosis of the issue\n")
-	sb.WriteString("2. Likely root causes\n")
-	sb.WriteString("3. Recommended solutions\n")
-	sb.WriteString("4. Specific kubectl commands to help diagnose or fix the issue\n")
-	
-	return sb.String()
-}
-
-func formatContainerIssues(containers []k8s.ContainerIssue) string {
-	var sb strings.Builder
-	
-	for _, container := range containers {
-		sb.WriteString(fmt.Sprintf("- Container: %s\n", container.Name))
-		sb.WriteString(fmt.Sprintf("  Status: %s\n", container.Status))
-		sb.WriteString(fmt.Sprintf("  Restarts: %d\n", container.Restarts))
-		
-		if container.Reason != "" {
-			sb.WriteString(fmt.Sprintf("  Reason: %s\n", container.Reason))
-		}
-		
-		if container.Message != "" {
-			sb.WriteString(fmt.Sprintf("  Message: %s\n", container.Message))
-		}
-		
-		sb.WriteString("\n")
-	}
-	
-	return sb.String()
-}
-
-func formatEvents(events []interface{}) string {
-	var sb strings.Builder
-	
-	// Convert events to JSON for consistent formatting
-	eventsJSON, err := json.MarshalIndent(events, "", "  ")
-	if err != nil {
-		return "Error formatting events"
-	}
-	
-	sb.WriteString(string(eventsJSON))
-	return sb.String()
-}
-
-func formatDeploymentConditions(conditions interface{}) string {
-	var sb strings.Builder
-	
-	// Convert conditions to JSON for consistent formatting
-	conditionsJSON, err := json.MarshalIndent(conditions, "", "  ")
-	if err != nil {
-		return "Error formatting conditions"
-	}
-	
-	sb.WriteString(string(conditionsJSON))
-	return sb.String()
 }

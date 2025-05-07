@@ -6,8 +6,9 @@ import (
 	"time"
 )
 
-// GetFailedEvents gets all failed events in the specified namespace
-func (c *Client) GetFailedEvents(namespace string) ([]interface{}, error) {
+// GetFailedEventsLegacy gets all failed events in the specified namespace
+// This is kept for reference but not used
+func (c *Client) GetFailedEventsLegacy(namespace string) ([]interface{}, error) {
 	// Get all events in the namespace
 	output, err := c.ExecuteKubectl("get", "events", "-n", namespace, "-o", "json")
 	if err != nil {

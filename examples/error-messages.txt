@@ -1,0 +1,98 @@
+# Common Kubernetes Error Messages for Demo
+
+## Pod Errors
+
+1. CrashLoopBackOff
+```
+CrashLoopBackOff: container exited with code 1
+```
+
+2. ImagePullBackOff
+```
+ImagePullBackOff: Back-off pulling image myregistry.com/myapp:latest
+```
+
+3. Readiness Probe Failure
+```
+Readiness probe failed: HTTP probe failed with statuscode: 500
+```
+
+4. Liveness Probe Failure
+```
+Liveness probe failed: Get "http://10.1.2.3:8080/health": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+```
+
+5. OOMKilled
+```
+OOMKilled: Container was killed due to out of memory
+```
+
+## Deployment Errors
+
+1. Replica Failure
+```
+Deployment does not have minimum availability: 2/5 replicas are available
+```
+
+2. Resource Quota Exceeded
+```
+Error creating: pods "database-5c7cf34fd8-" is forbidden: exceeded quota: resource-quota, requested: memory=1Gi, used: memory=2Gi, limited: memory=2Gi
+```
+
+3. PVC Binding Failure
+```
+persistentvolumeclaim "data-pvc" not found
+```
+
+## Service Errors
+
+1. No Endpoints
+```
+Service has no endpoint pods
+```
+
+2. Port Conflict
+```
+The Service "frontend" is invalid: spec.ports[0].port: Invalid value: 80: port is already allocated
+```
+
+## Node Errors
+
+1. Node Not Ready
+```
+Node "worker-1" is not ready: NodeStatusUnknown
+```
+
+2. Disk Pressure
+```
+Node "worker-2" is under disk pressure
+```
+
+## Authentication/Authorization Errors
+
+1. Forbidden
+```
+Error from server (Forbidden): pods is forbidden: User "developer" cannot list resource "pods" in API group "" in the namespace "kube-system"
+```
+
+2. Invalid Token
+```
+Error from server (Unauthorized): Unauthorized
+```
+
+## Miscellaneous Errors
+
+1. ConfigMap Not Found
+```
+configmaps "app-config" not found
+```
+
+2. Secret Not Found
+```
+secrets "db-credentials" not found
+```
+
+3. Invalid YAML
+```
+error validating "deployment.yaml": error validating data: ValidationError(Deployment.spec.template.spec.containers[0].resources.limits): invalid type for io.k8s.api.core.v1.ResourceList: got "string", expected "map"; if you choose to ignore these errors, turn validation off with --validate=false
+```

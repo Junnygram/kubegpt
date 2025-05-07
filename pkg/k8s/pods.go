@@ -8,8 +8,9 @@ import (
 	"time"
 )
 
-// GetUnhealthyPods gets all unhealthy pods in the specified namespace
-func (c *Client) GetUnhealthyPods(namespace string) ([]PodIssue, error) {
+// GetUnhealthyPodsLegacy gets all unhealthy pods in the specified namespace
+// This is kept for reference but not used
+func (c *Client) GetUnhealthyPodsLegacy(namespace string) ([]PodIssue, error) {
 	// Get all pods in the namespace
 	output, err := c.ExecuteKubectl("get", "pods", "-n", namespace, "-o", "json")
 	if err != nil {

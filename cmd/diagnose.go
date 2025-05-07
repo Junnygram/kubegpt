@@ -1,313 +1,231 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/junioroyewunmi/kubegpt/pkg/ai"
 	"github.com/junioroyewunmi/kubegpt/pkg/k8s"
-	"github.com/junioroyewunmi/kubegpt/pkg/utils"
+	"github.com/junioroyewunmi/kubegpt/pkg/output"
 )
 
 var (
-	podsOnly    bool
-	deploymentsOnly bool
-	allNamespaces bool
+	includeEvents    bool
+	includePods      bool
+	includeDeployments bool
+	includeServices  bool
+	podsOnly         bool
+	maxItems         int
 )
 
 // diagnoseCmd represents the diagnose command
 var diagnoseCmd = &cobra.Command{
 	Use:   "diagnose",
 	Short: "Diagnose issues in your Kubernetes cluster",
-	Long: `Diagnose issues in your Kubernetes cluster using Amazon Q Developer.
-
-This command will:
-1. Connect to your Kubernetes cluster
-2. Identify unhealthy resources (pods, deployments, etc.)
-3. Analyze the issues using Amazon Q Developer
-4. Provide explanations and suggested fixes
+	Long: `Diagnose issues in your Kubernetes cluster by analyzing unhealthy resources
+and providing AI-powered explanations and suggestions for fixes.
 
 Examples:
-  # Diagnose issues in the current namespace
+  # Diagnose all issues in the current namespace
   kubegpt diagnose
 
   # Diagnose issues in a specific namespace
   kubegpt diagnose --namespace monitoring
 
-  # Diagnose only pod issues
+  # Diagnose only pod-related issues
   kubegpt diagnose --pods-only
 
   # Generate YAML patches to fix issues
   kubegpt diagnose --fix
 `,
 	Run: func(cmd *cobra.Command, args []string) {
-		runDiagnose()
-	},
-}
+		// Print logo
+		printLogo()
 
-func init() {
-	diagnoseCmd.Flags().BoolVar(&podsOnly, "pods-only", false, "only diagnose pod issues")
-	diagnoseCmd.Flags().BoolVar(&deploymentsOnly, "deployments-only", false, "only diagnose deployment issues")
-	diagnoseCmd.Flags().BoolVar(&allNamespaces, "all-namespaces", false, "diagnose issues in all namespaces")
-}
-
-func runDiagnose() {
-	printLogo()
-
-	// Create Kubernetes client
-	client := k8s.NewClient(kubeconfig, namespace)
-
-	// Get current namespace if not specified
-	currentNamespace := namespace
-	var err error
-	if currentNamespace == "" {
-		currentNamespace, err = client.GetCurrentNamespace()
+		// Create Kubernetes client
+		client, err := k8s.NewClient(kubeconfig)
 		if err != nil {
-			color.New(color.FgRed).Printf("Error getting current namespace: %s\n", utils.FormatError(err))
+			color.Red("Error creating Kubernetes client: %v", err)
 			return
 		}
-	}
 
-	// Get namespaces to diagnose
-	var namespaces []string
-	if allNamespaces {
-		namespaces, err = client.GetNamespaces()
-		if err != nil {
-			color.New(color.FgRed).Printf("Error getting namespaces: %s\n", utils.FormatError(err))
-			return
+		// Set namespace if provided
+		if namespace != "" {
+			client.SetNamespace(namespace)
 		}
-	} else {
-		namespaces = []string{currentNamespace}
-	}
 
-	// Create Amazon Q client
-	amazonQClient := ai.NewAmazonQClient()
+		// Get current namespace
+		currentNamespace := client.GetCurrentNamespace()
+		color.New(color.FgCyan).Printf("Diagnosing issues in namespace: %s\n\n", currentNamespace)
 
-	// Diagnose each namespace
-	for _, ns := range namespaces {
-		diagnoseNamespace(client, amazonQClient, ns)
-	}
-}
+		// Create context with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 
-func diagnoseNamespace(client *k8s.Client, amazonQClient *ai.AmazonQClient, namespace string) {
-	color.New(color.FgYellow).Printf("Diagnosing issues in namespace: %s\n\n", namespace)
+		// Initialize results
+		var results output.DiagnosticResults
+		results.Namespace = currentNamespace
+		results.Timestamp = time.Now()
 
-	// Track unhealthy resources
-	var unhealthyPods []k8s.PodIssue
-	var unhealthyDeployments []k8s.DeploymentIssue
-	var failedEvents []interface{}
-
-	// Check pods
-	if !deploymentsOnly {
-		fmt.Println("Checking pods...")
-		pods, err := client.GetUnhealthyPods(namespace)
-		if err != nil {
-			color.New(color.FgRed).Printf("Error checking pods: %s\n", utils.FormatError(err))
-		} else {
-			unhealthyPods = pods
-			color.New(color.FgYellow).Printf("Found %d unhealthy pods\n\n", len(pods))
+		// If pods-only flag is set, only check pods
+		if podsOnly {
+			includePods = true
+			includeEvents = false
+			includeDeployments = false
+			includeServices = false
 		}
-	}
 
-	// Check deployments
-	if !podsOnly {
-		fmt.Println("Checking deployments...")
-		deployments, err := client.GetUnhealthyDeployments(namespace)
-		if err != nil {
-			color.New(color.FgRed).Printf("Error checking deployments: %s\n", utils.FormatError(err))
-		} else {
-			unhealthyDeployments = deployments
-			color.New(color.FgYellow).Printf("Found %d unhealthy deployments\n\n", len(deployments))
-		}
-	}
-
-	// Check events
-	if !podsOnly && !deploymentsOnly {
-		fmt.Println("Checking events...")
-		events, err := client.GetFailedEvents(namespace)
-		if err != nil {
-			color.New(color.FgRed).Printf("Error checking events: %s\n", utils.FormatError(err))
-		} else {
-			failedEvents = events
-			color.New(color.FgYellow).Printf("Found %d failed events\n\n", len(events))
-		}
-	}
-
-	// Analyze issues with Amazon Q
-	if len(unhealthyPods) > 0 || len(unhealthyDeployments) > 0 {
-		color.New(color.FgCyan).Println("Analyzing issues with Amazon Q...")
-
-		// Analyze pod issues
-		for i := range unhealthyPods {
-			color.New(color.FgCyan).Printf("Analyzing pod %s...\n", unhealthyPods[i].Name)
-			analysis, err := amazonQClient.AnalyzePodIssue(unhealthyPods[i])
+		// Collect unhealthy pods
+		if includePods {
+			fmt.Println("Checking pods...")
+			pods, err := client.GetUnhealthyPods(ctx)
 			if err != nil {
-				color.New(color.FgRed).Printf("Error analyzing pod: %s\n", utils.FormatError(err))
+				color.Red("Error getting unhealthy pods: %v", err)
 			} else {
-				unhealthyPods[i].Analysis = analysis
+				results.UnhealthyPods = pods
+				color.Yellow("Found %d unhealthy pods", len(pods))
 			}
+		}
+
+		// Collect failed events
+		if includeEvents {
+			fmt.Println("Checking events...")
+			events, err := client.GetFailedEvents(ctx)
+			if err != nil {
+				color.Red("Error getting failed events: %v", err)
+			} else {
+				results.FailedEvents = events
+				color.Yellow("Found %d failed events", len(events))
+			}
+		}
+
+		// Collect misconfigured deployments
+		if includeDeployments {
+			fmt.Println("Checking deployments...")
+			deployments, err := client.GetMisconfiguredDeployments(ctx)
+			if err != nil {
+				color.Red("Error getting misconfigured deployments: %v", err)
+			} else {
+				results.MisconfiguredDeployments = deployments
+				color.Yellow("Found %d misconfigured deployments", len(deployments))
+			}
+		}
+
+		// Collect service issues
+		if includeServices {
+			fmt.Println("Checking services...")
+			services, err := client.GetServiceIssues(ctx)
+			if err != nil {
+				color.Red("Error getting service issues: %v", err)
+			} else {
+				results.ServiceIssues = services
+				color.Yellow("Found %d service issues", len(services))
+			}
+		}
+
+		// If no issues found
+		if len(results.UnhealthyPods) == 0 && 
+		   len(results.FailedEvents) == 0 && 
+		   len(results.MisconfiguredDeployments) == 0 &&
+		   len(results.ServiceIssues) == 0 {
+			color.Green("\n✓ No issues found in namespace %s", currentNamespace)
+			return
+		}
+
+		// Analyze issues with Amazon Q
+		fmt.Println("\nAnalyzing issues with Amazon Q...")
+		amazonQ := ai.NewAmazonQClient()
+
+		// Analyze unhealthy pods
+		for i, pod := range results.UnhealthyPods {
+			if i >= maxItems {
+				break
+			}
+			fmt.Printf("Analyzing pod %s...\n", pod.Name)
+			analysis, err := amazonQ.AnalyzePodIssue(pod)
+			if err != nil {
+				color.Red("Error analyzing pod %s: %v", pod.Name, err)
+				continue
+			}
+			results.UnhealthyPods[i].Analysis = analysis
 
 			// Generate fix if requested
 			if fix {
-				color.New(color.FgCyan).Printf("Generating fix for pod %s...\n", unhealthyPods[i].Name)
-				fixSuggestion, err := amazonQClient.GeneratePodFix(unhealthyPods[i])
+				fixYAML, err := amazonQ.GeneratePodFix(pod)
 				if err != nil {
-					color.New(color.FgRed).Printf("Error generating fix: %s\n", utils.FormatError(err))
+					color.Red("Error generating fix for pod %s: %v", pod.Name, err)
 				} else {
-					unhealthyPods[i].Fix = fixSuggestion
+					results.UnhealthyPods[i].Fix = fixYAML
 				}
 			}
 		}
 
 		// Analyze deployment issues
-		for i := range unhealthyDeployments {
-			color.New(color.FgCyan).Printf("Analyzing deployment %s...\n", unhealthyDeployments[i].Name)
-			analysis, err := amazonQClient.AnalyzeDeploymentIssue(unhealthyDeployments[i])
-			if err != nil {
-				color.New(color.FgRed).Printf("Error analyzing deployment: %s\n", utils.FormatError(err))
-			} else {
-				unhealthyDeployments[i].Analysis = analysis
+		for i, deployment := range results.MisconfiguredDeployments {
+			if i >= maxItems {
+				break
 			}
+			fmt.Printf("Analyzing deployment %s...\n", deployment.Name)
+			analysis, err := amazonQ.AnalyzeDeploymentIssue(deployment)
+			if err != nil {
+				color.Red("Error analyzing deployment %s: %v", deployment.Name, err)
+				continue
+			}
+			results.MisconfiguredDeployments[i].Analysis = analysis
 
 			// Generate fix if requested
 			if fix {
-				color.New(color.FgCyan).Printf("Generating fix for deployment %s...\n", unhealthyDeployments[i].Name)
-				fixSuggestion, err := amazonQClient.GenerateDeploymentFix(unhealthyDeployments[i])
+				fixYAML, err := amazonQ.GenerateDeploymentFix(deployment)
 				if err != nil {
-					color.New(color.FgRed).Printf("Error generating fix: %s\n", utils.FormatError(err))
+					color.Red("Error generating fix for deployment %s: %v", deployment.Name, err)
 				} else {
-					unhealthyDeployments[i].Fix = fixSuggestion
+					results.MisconfiguredDeployments[i].Fix = fixYAML
 				}
 			}
 		}
-	}
 
-	// Print diagnostic results
-	fmt.Println()
-	color.New(color.FgGreen, color.Bold).Printf("Diagnostic Results for Namespace: %s\n", namespace)
-	color.New(color.FgWhite).Printf("Time: %s\n\n", time.Now().Format(time.RFC1123))
-
-	// Print summary
-	color.New(color.FgYellow, color.Bold).Println("Summary:")
-	color.New(color.FgWhite).Printf("- Unhealthy Pods: %d\n", len(unhealthyPods))
-	color.New(color.FgWhite).Printf("- Unhealthy Deployments: %d\n", len(unhealthyDeployments))
-	color.New(color.FgWhite).Printf("- Failed Events: %d\n", len(failedEvents))
-	fmt.Println()
-
-	// Print pod issues
-	if len(unhealthyPods) > 0 {
-		color.New(color.FgYellow, color.Bold).Println("Unhealthy Pods:")
-		fmt.Println()
-
-		for i, pod := range unhealthyPods {
-			color.New(color.FgCyan, color.Bold).Printf("[%d] Pod: %s\n", i+1, pod.Name)
-			color.New(color.FgWhite).Printf("    Status: %s\n", pod.Status)
-			
-			if pod.Reason != "" {
-				color.New(color.FgWhite).Printf("    Reason: %s\n", pod.Reason)
-			}
-			
-			if pod.Message != "" {
-				color.New(color.FgWhite).Printf("    Message: %s\n", pod.Message)
-			}
-			
-			if len(pod.Containers) > 0 {
-				color.New(color.FgWhite).Println("    Container Issues:")
-				for _, container := range pod.Containers {
-					color.New(color.FgWhite).Printf("    - %s: %s (Restarts: %d)\n", container.Name, container.Status, container.Restarts)
-					if container.Reason != "" {
-						color.New(color.FgWhite).Printf("      Reason: %s\n", container.Reason)
-					}
-					if container.Message != "" {
-						color.New(color.FgWhite).Printf("      Message: %s\n", container.Message)
-					}
+		// Output results based on format
+		switch outputFormat {
+		case "terminal":
+			output.PrintTerminalOutput(results)
+		case "markdown":
+			markdownContent := output.GenerateMarkdownReport(results)
+			if reportFile != "" {
+				err := output.WriteToFile(reportFile, markdownContent)
+				if err != nil {
+					color.Red("Error writing to file: %v", err)
+				} else {
+					color.Green("Report written to %s", reportFile)
 				}
+			} else {
+				fmt.Println(markdownContent)
 			}
-			
-			fmt.Println()
-			
-			if pod.Analysis != "" {
-				color.New(color.FgGreen).Println("    Analysis:")
-				fmt.Printf("    %s\n", strings.ReplaceAll(pod.Analysis, "\n", "\n    "))
-				fmt.Println()
-			}
-			
-			if pod.Fix != "" {
-				color.New(color.FgGreen).Println("    Suggested Fix:")
-				fmt.Printf("    %s\n", strings.ReplaceAll(pod.Fix, "\n", "\n    "))
-				fmt.Println()
-			}
-			
-			fmt.Println()
-		}
-	}
-
-	// Print deployment issues
-	if len(unhealthyDeployments) > 0 {
-		color.New(color.FgYellow, color.Bold).Println("Unhealthy Deployments:")
-		fmt.Println()
-
-		for i, deployment := range unhealthyDeployments {
-			color.New(color.FgCyan, color.Bold).Printf("[%d] Deployment: %s\n", i+1, deployment.Name)
-			color.New(color.FgWhite).Printf("    Replicas: %d/%d ready\n", deployment.ReadyReplicas, deployment.Replicas)
-			
-			if deployment.Reason != "" {
-				color.New(color.FgWhite).Printf("    Reason: %s\n", deployment.Reason)
-			}
-			
-			if deployment.Message != "" {
-				color.New(color.FgWhite).Printf("    Message: %s\n", deployment.Message)
-			}
-			
-			fmt.Println()
-			
-			if deployment.Analysis != "" {
-				color.New(color.FgGreen).Println("    Analysis:")
-				fmt.Printf("    %s\n", strings.ReplaceAll(deployment.Analysis, "\n", "\n    "))
-				fmt.Println()
-			}
-			
-			if deployment.Fix != "" {
-				color.New(color.FgGreen).Println("    Suggested Fix:")
-				fmt.Printf("    %s\n", strings.ReplaceAll(deployment.Fix, "\n", "\n    "))
-				fmt.Println()
-			}
-			
-			fmt.Println()
-		}
-	}
-
-	// Print failed events
-	if len(failedEvents) > 0 {
-		color.New(color.FgYellow, color.Bold).Println("Failed Events:")
-		fmt.Println()
-
-		// Print events (simplified for now)
-		for i, event := range failedEvents {
-			if eventMap, ok := event.(map[string]interface{}); ok {
-				reason := eventMap["reason"]
-				message := eventMap["message"]
-				involvedObject := eventMap["involvedObject"]
-				
-				if involvedObjectMap, ok := involvedObject.(map[string]interface{}); ok {
-					kind := involvedObjectMap["kind"]
-					name := involvedObjectMap["name"]
-					
-					color.New(color.FgCyan, color.Bold).Printf("[%d] %s: %s\n", i+1, kind, name)
-					color.New(color.FgWhite).Printf("    Reason: %s\n", reason)
-					color.New(color.FgWhite).Printf("    Message: %s\n", message)
-					fmt.Println()
+		case "slack":
+			if slackWebhook != "" {
+				err := output.SendToSlack(slackWebhook, results)
+				if err != nil {
+					color.Red("Error sending to Slack: %v", err)
+				} else {
+					color.Green("Report sent to Slack")
 				}
+			} else {
+				color.Red("Slack webhook URL not provided")
 			}
+		default:
+			color.Red("Unknown output format: %s", outputFormat)
 		}
-	}
+	},
+}
 
-	// No issues found
-	if len(unhealthyPods) == 0 && len(unhealthyDeployments) == 0 && len(failedEvents) == 0 {
-		color.New(color.FgGreen).Println("No issues found in this namespace! 🎉")
-		fmt.Println()
-	}
+func init() {
+	// Flags specific to the diagnose command
+	diagnoseCmd.Flags().BoolVar(&includeEvents, "events", true, "include failed events in diagnosis")
+	diagnoseCmd.Flags().BoolVar(&includePods, "pods", true, "include unhealthy pods in diagnosis")
+	diagnoseCmd.Flags().BoolVar(&includeDeployments, "deployments", true, "include misconfigured deployments in diagnosis")
+	diagnoseCmd.Flags().BoolVar(&includeServices, "services", true, "include service issues in diagnosis")
+	diagnoseCmd.Flags().BoolVar(&podsOnly, "pods-only", false, "only check pods")
+	diagnoseCmd.Flags().IntVar(&maxItems, "max-items", 5, "maximum number of items to analyze per resource type")
 }

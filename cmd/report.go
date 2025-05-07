@@ -1,13 +1,21 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"github.com/junioroyewunmi/kubegpt/pkg/k8s"
-	"github.com/junioroyewunmi/kubegpt/pkg/utils"
+	"github.com/junioroyewunmi/kubegpt/pkg/output"
+
+	"github.com/spf13/cobra"
+)
+
+var (
+	allNamespacesFlag bool
 )
 
 // reportCmd represents the report command
@@ -41,121 +49,150 @@ Examples:
 }
 
 func init() {
-	reportCmd.Flags().BoolVar(&allNamespaces, "all-namespaces", false, "report on all namespaces")
+	reportCmd.Flags().BoolVar(&allNamespacesFlag, "all-namespaces", false, "report on all namespaces")
 }
 
 func runReport() {
 	printLogo()
 
 	// Create Kubernetes client
-	client := k8s.NewClient(kubeconfig, namespace)
-
-	// Get current namespace if not specified
-	currentNamespace := namespace
-	var err error
-	if currentNamespace == "" {
-		currentNamespace, err = client.GetCurrentNamespace()
-		if err != nil {
-			color.New(color.FgRed).Printf("Error getting current namespace: %s\n", utils.FormatError(err))
-			return
-		}
+	client, err := k8s.NewClient(kubeconfig)
+	if err != nil {
+		color.Red("Error creating Kubernetes client: %v", err)
+		return
 	}
 
-	// Get namespaces to report on
-	var namespaces []string
-	if allNamespaces {
-		namespaces, err = client.GetNamespaces()
-		if err != nil {
-			color.New(color.FgRed).Printf("Error getting namespaces: %s\n", utils.FormatError(err))
-			return
-		}
-	} else {
-		namespaces = []string{currentNamespace}
+	// Set namespace if provided
+	if namespace != "" {
+		client.SetNamespace(namespace)
 	}
 
-	// Generate report for each namespace
+	// Get current namespace
+	currentNamespace := client.GetCurrentNamespace()
+
+	// Initialize diagnostic results
+	results := output.DiagnosticResults{
+		Namespace: currentNamespace,
+		Timestamp: time.Now(),
+	}
+
+	// Generate report header
 	color.New(color.FgGreen, color.Bold).Println("Kubernetes Cluster Health Report")
 	color.New(color.FgWhite).Printf("Time: %s\n\n", time.Now().Format(time.RFC1123))
 
-	for _, ns := range namespaces {
-		generateNamespaceReport(client, ns)
-	}
+	fmt.Printf("Namespace: %s\n\n", currentNamespace)
 
-	// Save report to file if requested
-	if reportFile != "" {
-		color.New(color.FgYellow).Printf("Report saved to %s\n", reportFile)
-	}
-}
-
-func generateNamespaceReport(client *k8s.Client, namespace string) {
-	color.New(color.FgYellow, color.Bold).Printf("Namespace: %s\n", namespace)
-	fmt.Println()
+	ctx := context.Background()
 
 	// Get pods
 	fmt.Println("Checking pods...")
-	pods, err := client.GetUnhealthyPods(namespace)
+	pods, err := client.GetUnhealthyPods(ctx)
 	if err != nil {
-		color.New(color.FgRed).Printf("Error checking pods: %s\n", utils.FormatError(err))
+		color.Red("Error checking pods: %v", err)
 	} else {
+		results.UnhealthyPods = pods
 		if len(pods) > 0 {
-			color.New(color.FgRed).Printf("Found %d unhealthy pods\n", len(pods))
+			color.Red("Found %d unhealthy pods\n", len(pods))
 			for _, pod := range pods {
-				color.New(color.FgWhite).Printf("- %s: %s\n", pod.Name, pod.Status)
+				color.White("- %s: %s\n", pod.Name, pod.Status)
 				if pod.Reason != "" {
-					color.New(color.FgWhite).Printf("  Reason: %s\n", pod.Reason)
+					color.White("  Reason: %s\n", pod.Reason)
 				}
 			}
 		} else {
-			color.New(color.FgGreen).Println("All pods are healthy")
+			color.Green("All pods are healthy")
 		}
 	}
 	fmt.Println()
 
 	// Get deployments
 	fmt.Println("Checking deployments...")
-	deployments, err := client.GetUnhealthyDeployments(namespace)
+	deployments, err := client.GetMisconfiguredDeployments(ctx)
 	if err != nil {
-		color.New(color.FgRed).Printf("Error checking deployments: %s\n", utils.FormatError(err))
+		color.Red("Error checking deployments: %v", err)
 	} else {
+		results.MisconfiguredDeployments = deployments
 		if len(deployments) > 0 {
-			color.New(color.FgRed).Printf("Found %d unhealthy deployments\n", len(deployments))
+			color.Red("Found %d unhealthy deployments\n", len(deployments))
 			for _, deployment := range deployments {
-				color.New(color.FgWhite).Printf("- %s: %d/%d replicas ready\n", deployment.Name, deployment.ReadyReplicas, deployment.Replicas)
+				color.White("- %s: %d/%d replicas ready\n", deployment.Name, deployment.ReadyReplicas, deployment.Replicas)
 				if deployment.Reason != "" {
-					color.New(color.FgWhite).Printf("  Reason: %s\n", deployment.Reason)
+					color.White("  Reason: %s\n", deployment.Reason)
 				}
 			}
 		} else {
-			color.New(color.FgGreen).Println("All deployments are healthy")
+			color.Green("All deployments are healthy")
 		}
 	}
 	fmt.Println()
 
 	// Get events
 	fmt.Println("Checking events...")
-	events, err := client.GetFailedEvents(namespace)
+	events, err := client.GetFailedEvents(ctx)
 	if err != nil {
-		color.New(color.FgRed).Printf("Error checking events: %s\n", utils.FormatError(err))
+		color.Red("Error checking events: %v", err)
 	} else {
+		results.FailedEvents = events
 		if len(events) > 0 {
-			color.New(color.FgRed).Printf("Found %d failed events\n", len(events))
+			color.Red("Found %d failed events\n", len(events))
 			for _, event := range events {
 				if eventMap, ok := event.(map[string]interface{}); ok {
 					reason := eventMap["reason"]
 					message := eventMap["message"]
 					involvedObject := eventMap["involvedObject"]
-					
+
 					if involvedObjectMap, ok := involvedObject.(map[string]interface{}); ok {
 						kind := involvedObjectMap["kind"]
 						name := involvedObjectMap["name"]
-						
-						color.New(color.FgWhite).Printf("- %s %s: %s - %s\n", kind, name, reason, message)
+
+						color.White("- %s %s: %s - %s\n", kind, name, reason, message)
 					}
 				}
 			}
 		} else {
-			color.New(color.FgGreen).Println("No failed events found")
+			color.Green("No failed events found")
 		}
 	}
 	fmt.Println()
+
+	// Save report to file if requested
+	if reportFile != "" && outputFormat == "markdown" {
+		// Generate the markdown report
+		markdownContent := output.GenerateMarkdownReport(results)
+
+		// Get current working directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			color.Red("Error getting current directory: %v", err)
+			return
+		}
+
+		// Create the full path to save the file
+		fullPath := filepath.Join(cwd, reportFile)
+
+		// Create the directory if it doesn't exist
+		dir := filepath.Dir(fullPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			color.Red("Error creating directory: %v", err)
+			return
+		}
+
+		// Open the file with write permissions, create if it doesn't exist
+		file, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		if err != nil {
+			color.Red("Error opening file for writing: %v", err)
+			return
+		}
+		defer file.Close()
+
+		// Write the content to the file
+		_, err = file.WriteString(markdownContent)
+		if err != nil {
+			color.Red("Error writing to file: %v", err)
+		} else {
+			color.Green("Report saved to %s", fullPath)
+			fmt.Printf("Report content length: %d bytes\n", len(markdownContent))
+		}
+	}
+
 }
